@@ -4,7 +4,14 @@
 // A protocol's status comes only from what its record carries:
 //   pre-token      records no token at all (mcap, gecko_id and symbol all null) — 342 in this snapshot
 //   live           mcap_usd > 0 — the market's own value, never a model number — 128
-//   live-unpriced  records a token but no usable market cap (mcap null, or -1 in one record) — 288
+//   live-unpriced  records a token but no usable market cap (mcap null, or 0 / -1 in 16 records) — 288
+//   not-a-launch   records no token BUT is structurally not a launch: a centralised exchange, a bridge,
+//     a liquid-staking / restaking product, a wrapped or staked product, an exchange-branded product,
+//     or a versioned pool name — the snapshot's own watchlist rule, applied here so the top of the
+//     pre-token board is not Robinhood, Bybit, WBTC and Binance staked ETH. 144 of the 342 record-no-
+//     token rows fall here; 198 genuine pre-token launches remain. Not-a-launch rows stay on the board
+//     (758/758 coverage) at their fitted value for reference only, with verdict Skip, and never enter
+//     the pre-token ranking.
 //
 // Implied value, fitted at runtime from the snapshot itself — no protocol name is ever special-cased:
 //
@@ -94,7 +101,27 @@ export interface FarmStep {
   time: string;
 }
 
-export type TokenStatus = 'pre-token' | 'live' | 'live-unpriced';
+export type TokenStatus = 'pre-token' | 'live' | 'live-unpriced' | 'not-a-launch';
+
+/** Categories that are structurally not a token launch (the snapshot's own watchlist rule). */
+export const NON_LAUNCH_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
+/** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
+const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
+const WRAPPED_OR_STAKED = /\b(wrapped|staked|staking)\b/i;
+const EXCHANGE_NAMES = ['binance', 'coinbase', 'bybit', 'kraken', 'bitget', 'okx', 'bitfinex', 'gemini'];
+
+/** Why a protocol that records no token is still not a launch candidate, or null. */
+export function exclusionReason(p: SnapshotProtocol): string | null {
+  if (p.category !== null && NON_LAUNCH_CATEGORIES.has(p.category)) {
+    if (p.category === 'CEX') return 'centralised exchange';
+    if (p.category === 'Bridge' || p.category === 'Canonical Bridge') return 'bridge product';
+    return 'liquid staking / restaking product';
+  }
+  if (VERSIONED.test(p.name)) return 'versioned pool name (a version of another protocol)';
+  if (WRAPPED_OR_STAKED.test(p.name)) return 'wrapped or staked product of a token that already trades';
+  if (EXCHANGE_NAMES.some((e) => p.name.toLowerCase().startsWith(e))) return 'exchange-branded product';
+  return null;
+}
 
 /** One row of board.json: the ranked board's row. */
 export interface BoardRow {
@@ -107,6 +134,7 @@ export interface BoardRow {
   change_7d: number | null;
   age_days: number | null;
   token_status: TokenStatus;
+  exclusion_reason: string | null;
   fitted_value_usd: number;
   token_odds: number | null;
   growth_multiplier: number;
@@ -132,6 +160,7 @@ export interface RadarData {
   pre_token_size: number;
   live_size: number;
   live_unpriced_size: number;
+  not_a_launch_size: number;
   comps: CompsFit;
   odds_global: number;
   odds_cells: OddsCell[];
@@ -176,7 +205,7 @@ export function recordsToken(p: SnapshotProtocol): boolean {
 }
 
 export function tokenStatus(p: SnapshotProtocol): TokenStatus {
-  if (isPreToken(p)) return 'pre-token';
+  if (isPreToken(p)) return exclusionReason(p) === null ? 'pre-token' : 'not-a-launch';
   if (typeof p.mcap_usd === 'number' && p.mcap_usd > 0) return 'live';
   return 'live-unpriced';
 }
@@ -406,6 +435,41 @@ export function farmSteps(p: SnapshotProtocol, age: number | null, status: Token
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
   const setupGas = capital >= 150 ? 8 : 4;
+  if (status === 'not-a-launch') {
+    const reason = exclusionReason(p) ?? 'not a launch candidate';
+    return [
+      {
+        text: `Do not farm ${p.name} as a token launch: it is a ${reason}, so there is no launch of its own to wait for.`,
+        cost: 'nothing — the step is to skip it',
+        time: '2 minutes to read this',
+      },
+      {
+        text: `If you still want exposure, use ${p.name} on ${chain} for what it is — for example a trade or a transfer — with money you can afford to lose.`,
+        cost: `${money(capital)} of capital and about ${money(setupGas)} of gas`,
+        time: '15 minutes to set up',
+      },
+      {
+        text: `Check the protocol's own announcements page for any token program; only a program it publishes itself counts.`,
+        cost: 'no fee to check',
+        time: '10 minutes',
+      },
+      {
+        text: `Hold any position for at least ${hold} days and keep a record of every transaction.`,
+        cost: `the ${money(capital)} stays in the position`,
+        time: `${hold} days`,
+      },
+      {
+        text: `Never pay to claim anything from ${p.name}, and never follow a claim link from a message or post.`,
+        cost: 'no fee to check, and never pay to claim',
+        time: '5 minutes',
+      },
+      {
+        text: `Write the wallet, the dates and every transaction in a farm log so you can unwind the position.`,
+        cost: 'nothing but the log',
+        time: '5 minutes',
+      },
+    ];
+  }
   const action = actionFor(p, capital, chain);
   const action2 = action2For(p, capital, chain);
   const liveNote =
@@ -472,6 +536,12 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
         p, status, age, fitted, tilt, odds: null, expected: null, implied: Math.max(1, Math.round(p.mcap_usd!)), verdict: 'live' as const, cost, share: null,
       };
     }
+    if (status === 'not-a-launch') {
+      // Reference only: never enters the pre-token ranking, verdict Skip.
+      return {
+        p, status, age, fitted, tilt, odds: null, expected: null, implied: Math.max(1, Math.round(fitted)), verdict: 'Skip' as const, cost, share: null,
+      };
+    }
     // live-unpriced: the fitted value, for reference only.
     return {
       p, status, age, fitted, tilt, odds: null, expected: null, implied: Math.max(1, Math.round(fitted)), verdict: 'live' as const, cost, share: null,
@@ -488,6 +558,7 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
     change_7d: s.p.change_7d,
     age_days: s.age,
     token_status: s.status,
+    exclusion_reason: s.status === 'not-a-launch' ? exclusionReason(s.p) : null,
     fitted_value_usd: Math.max(1, Math.round(s.fitted)),
     token_odds: s.odds,
     growth_multiplier: s.tilt,
@@ -523,6 +594,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     pre_token_size: board.filter((r) => r.token_status === 'pre-token').length,
     live_size: board.filter((r) => r.token_status === 'live').length,
     live_unpriced_size: board.filter((r) => r.token_status === 'live-unpriced').length,
+    not_a_launch_size: board.filter((r) => r.token_status === 'not-a-launch').length,
     comps: fit,
     odds_global: table.global,
     odds_cells: table.cells,

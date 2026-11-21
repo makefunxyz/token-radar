@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Launch Radar — pre-token protocols ranked by implied value</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main class="shell">
+  <header class="top">
+    <div>
+      <p class="brand"><span class="mark"></span>TOKEN LAUNCH RADAR</p>
+      <h1>Which protocol launches the next big token?</h1>
+      <p class="lede">Every protocol in the snapshot, ranked by implied value. Pre-token rows are valued by a
+      model fitted on the 128 protocols whose tokens already trade; live rows show the market's own value.
+      Click any row for its model breakdown and farm plan.</p>
+    </div>
+    <div class="top-meta" id="top-meta"></div>
+  </header>
+
+  <section class="kpis" id="kpis" aria-label="Coverage and model summary"></section>
+
+  <section class="controls" aria-label="Board controls">
+    <label>Search <input id="q" type="search" placeholder="Name or slug…" autocomplete="off"></label>
+    <label>Chain <select id="chain"><option value="">All chains</option></select></label>
+    <label>Category <select id="cat"><option value="">All categories</option></select></label>
+    <label>Status <select id="status">
+      <option value="pre-token" selected>Pre-token</option>
+      <option value="live">Live</option>
+      <option value="live-unpriced">Live, unpriced</option>
+      <option value="not-a-launch">Not a launch</option>
+      <option value="">All</option>
+    </select></label>
+    <label>Verdict <select id="verdict">
+      <option value="">All verdicts</option>
+      <option>Farm</option><option>Thin</option><option>Skip</option><option value="live">Live</option>
+    </select></label>
+    <p class="count" id="count"></p>
+  </section>
+
+  <section class="board-wrap">
+    <table class="board" id="board">
+      <thead><tr>
+        <th data-sort="prerank" class="num">#</th>
+        <th data-sort="rank" class="num">Rank</th>
+        <th data-sort="name">Protocol</th>
+        <th>Chain</th>
+        <th data-sort="category">Category</th>
+        <th data-sort="tvl" class="num">TVL</th>
+        <th data-sort="chg" class="num">7d %</th>
+        <th data-sort="fitted" class="num">Fitted $</th>
+        <th data-sort="odds" class="num">Odds %</th>
+        <th data-sort="expected" class="num">Expected $</th>
+        <th data-sort="verdict">Verdict</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p class="hint">Click a column header to sort. Click a row for its detail view and farm plan.</p>
+    <nav class="pager" aria-label="Pages">
+      <button id="prev" type="button">← Prev</button>
+      <span id="pageinfo"></span>
+      <button id="next" type="button">Next →</button>
+    </nav>
+  </section>
+
+  <section class="detail" id="detail" hidden></section>
+
+  <section class="method" id="method">
+    <h2>How the value is worked out</h2>
+    <p id="modelcheck" class="check"></p>
+    <div class="method-grid">
+      <div>
+        <h3>1 · Comps fit</h3>
+        <p id="fittext"></p>
+        <p class="note">TVL explains about 19% of log market-cap variance; the fit is a pricing anchor, not a
+        prediction. Growth is deliberately left out of the regression: its fitted coefficient is ≈ −0.04 and
+        adding it makes held-out error worse.</p>
+      </div>
+      <div>
+        <h3>2 · Token odds</h3>
+        <p>Share of protocols in each age × TVL cell that record a token, smoothed toward the global rate.
+        Older, larger protocols are more likely to record one.</p>
+        <table class="odds" id="oddstable"></table>
+      </div>
+      <div>
+        <h3>3 · Growth tilt &amp; farm verdict</h3>
+        <p id="tilttext"></p>
+        <p id="farmtext"></p>
+      </div>
+    </div>
+    <p class="integrity" id="integrity"></p>
+  </section>
+</main>
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -17,7 +17,7 @@
   }
   // Token presence is judged from the board row's status, which the builder derived from the
   // snapshot's gecko_id / symbol fields; the odds below count rows by that same status.
-  function hasToken(r) { return r.token_status !== 'pre-token'; }
+  function hasToken(r) { return r.token_status === 'live' || r.token_status === 'live-unpriced'; }
   function fitComps(rs) {
     var comps = rs.filter(function (r) { return r.mcap_usd !== null && r.mcap_usd > 0 && r.tvl_usd > 0; });
     var n = comps.length, xs = [], ys = [], i, mx = 0, my = 0;
@@ -124,7 +124,7 @@
     '<div>Model: <b>' + esc(D.model_version) + '</b></div>';
   var kpis = [
     [D.board_size, 'protocols ranked'], [D.watchlist_size, 'watchlist covered'],
-    [D.pre_token_size, 'pre-token'], [D.live_size, 'live (market cap)'],
+    [D.pre_token_size, 'pre-token launches'], [D.live_size + D.live_unpriced_size, 'record a token'],
     [D.comps.r2.toFixed(2), 'comps fit R²'], [D.comps.loo_mae.toFixed(2), 'LOO MAE (log pts)'],
     [money(D.median_expected_pre), 'median expected value, pre-token']
   ];
@@ -145,7 +145,7 @@
   $('oddstable').innerHTML = oddsHtml;
   $('tilttext').textContent = 'Growth tilt = 1 + clamp(7-day TVL change, −60%, +120%) × 0.001, so growth moves value at most ±12%. The comps fit finds no reliable growth premium (its fitted coefficient is ≈ −0.04), so growth is a mild prior, not a driver.';
   $('farmtext').textContent = 'Farm verdict: a farmer is assumed to take 0.1% of the expected value — a planning assumption, not a promise. Farm cost = setup gas ($4, or $8 for $150+ positions) + $2/week over the hold + 5% APR lockup on the capital. Share ≥ 3× cost → Farm; share ≥ cost → Thin; otherwise Skip. Live rows get a position plan instead: their token already trades.';
-  $('integrity').textContent = 'Data: DefiLlama protocols snapshot, as of ' + D.as_of + ', floor $50M, ' + D.board_size + ' protocols, watchlist ' + D.watchlist_size + ' — every watchlist slug is on this board. Honesty note: the snapshot records whether a protocol lists a token; a protocol that records no token may still have one its record does not carry, so this page says a protocol records no token, never that it has none. Implied values are this entry’s own model claim, not a price and not a prediction of if or when a token launches.';
+  $('integrity').textContent = 'Data: DefiLlama protocols snapshot, as of ' + D.as_of + ', floor $50M, ' + D.board_size + ' protocols, watchlist ' + D.watchlist_size + ' — every watchlist slug is on this board. ' + D.not_a_launch_size + ' rows record no token but are not launches at all (exchanges, bridges, liquid-staking and wrapped products, versioned pools), so they are kept on the board at their fitted value and kept out of the pre-token ranking. Honesty note: the snapshot records whether a protocol lists a token; a protocol that records no token may still have one its record does not carry, so this page says a protocol records no token, never that it has none. Implied values are this entry’s own model claim, not a price and not a prediction of if or when a token launches.';
 
   // ---- board ---------------------------------------------------------------------------
   var SORTS = {
@@ -230,6 +230,11 @@
         '<dt>Market cap (live)</dt><dd><b>' + moneyFull(r.implied_value_usd) + '</b></dd>' +
         '<dt>Fitted value (reference)</dt><dd>' + moneyFull(r.fitted_value_usd) + '</dd>' +
         '<dt>Token odds</dt><dd>— token already trades</dd>';
+    } else if (r.token_status === 'not-a-launch') {
+      valueRows =
+        '<dt>Fitted value (reference only)</dt><dd><b>' + moneyFull(r.fitted_value_usd) + '</b></dd>' +
+        '<dt>Why not a launch</dt><dd>' + esc(r.exclusion_reason || 'not a launch candidate') + '</dd>' +
+        '<dt>Token odds</dt><dd>— not a launch candidate</dd>';
     } else {
       valueRows =
         '<dt>Fitted value (reference only)</dt><dd><b>' + moneyFull(r.fitted_value_usd) + '</b></dd>' +
@@ -237,7 +242,9 @@
         '<dt>Token odds</dt><dd>— token recorded, unpriced</dd>';
     }
     var verdictLine = r.token_status === 'pre-token'
-      ? 'Verdict <b>' + r.verdict + '</b> — assumed farmer share ' + moneyFull(r.farmer_share_usd) + ' (0.1% of expected value) vs farm cost ' + moneyFull(r.farm_cost_usd) + '.'
+      ? 'Verdict <b>' + r.verdict + '</b> — assumed farmer share ' + moneyFull(r.farmer_share_usd) + ' (0.1% of expected value) vs farm cost ' + moneyFull(r.farm_cost_usd) + ', i.e. the share is ' + (r.farmer_share_usd / r.farm_cost_usd).toFixed(0) + '× the cost.'
+      : r.token_status === 'not-a-launch'
+      ? 'Verdict <b>Skip</b> — ' + esc(r.exclusion_reason || 'not a launch candidate') + ', so there is no launch to farm; the steps are a caution, not a farm plan.'
       : 'Verdict <b>live</b> — the token already trades (or is recorded), so there is no launch to farm; the steps below are a position plan.';
     el.innerHTML =
       '<h2>' + esc(r.name) + ' <span class="pill ' + r.verdict + '">' + r.verdict + '</span></h2>' +
