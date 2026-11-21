@@ -31,7 +31,12 @@
 //   farm_cost_usd = setup gas ($4, or $8 for capital >= $150) + $2/week x hold weeks
 //                   + capital locked at 5% APR over the hold days
 //   farmer_share_usd = 0.001 * expected_value (pre-token only; live rows get verdict "live", no share)
-//   share >= 3x cost -> "Farm"; share >= cost -> "Thin"; else "Skip".
+//   share >= 500x cost -> "Farm"; share >= 100x cost -> "Thin"; else "Skip".
+//   The bars are set high on purpose: the assumed share dwarfs the ~$17-40 farm cost on every
+//   row (smallest share/cost multiple on this snapshot is 44.6x), so a 3x bar would read "Farm"
+//   on all 198 pre-token rows and the verdict would say nothing. At 500x/100x the 198 rows
+//   split Farm 34 / Thin 121 / Skip 43, and each detail view shows the row's own multiple so
+//   the call can be checked.
 //
 // Farm steps: six steps per row, templated by the protocol's own category, chains, TVL band and age,
 // each step an action with a cost and a time. Live rows get a position plan in the same format.
@@ -526,7 +531,7 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
       const { odds } = tokenOdds(p, snapshot.as_of, table);
       const expected = Math.max(1, Math.round(fitted * odds * tilt));
       const share = Math.max(1, Math.round(FARMER_SHARE * expected));
-      const verdict: BoardRow['verdict'] = share >= 3 * cost ? 'Farm' : share >= cost ? 'Thin' : 'Skip';
+      const verdict: BoardRow['verdict'] = share >= 500 * cost ? 'Farm' : share >= 100 * cost ? 'Thin' : 'Skip';
       return {
         p, status, age, fitted, tilt, odds, expected, implied: expected, verdict, cost, share,
       };
