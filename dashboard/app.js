@@ -55,7 +55,18 @@
         cells.push({ ageLo: AGE_BANDS[ai][0], ageHi: AGE_BANDS[ai][1], tvlLo: TVL_BANDS[ti][0], tvlHi: TVL_BANDS[ti][1], n: n, k: k, rate: Math.min(0.95, Math.max(0.05, (k + 2 * global) / (n + 2))) });
       }
     }
-    return { global: global, cells: cells };
+    // Pooled by TVL band across ALL ages (age-known and age-unknown rows alike): the fallback for
+    // protocols whose age is unknown. This mirrors the builder exactly — pooling age-known cells
+    // only would disagree with the board on those rows.
+    var tvlPooled = [];
+    for (ti = 0; ti < TVL_BANDS.length; ti++) {
+      n = 0; k = 0;
+      rs.forEach(function (row) {
+        if (row.tvl_usd >= TVL_BANDS[ti][0] && row.tvl_usd < TVL_BANDS[ti][1]) { n++; if (hasToken(row)) k++; }
+      });
+      tvlPooled.push({ tvlLo: TVL_BANDS[ti][0], tvlHi: TVL_BANDS[ti][1], n: n, k: k, rate: Math.round(Math.min(0.95, Math.max(0.05, (k + 2 * global) / (n + 2))) * 1e4) / 1e4 });
+    }
+    return { global: global, cells: cells, tvlPooled: tvlPooled };
   }
   function oddsCellLabel(cell) {
     var a = cell.ageHi === Infinity ? cell.ageLo + 'd+' : cell.ageLo + '–' + cell.ageHi + 'd';
@@ -65,15 +76,18 @@
   function oddsFor(r, table) {
     var age = r.age_days;
     if (age === null) {
-      var pooled = table.cells.filter(function (c) { return r.tvl_usd >= c.tvlLo && r.tvl_usd < c.tvlHi; });
-      var n = 0, k = 0;
-      pooled.forEach(function (c) { n += c.n; k += c.k; });
-      return { odds: Math.min(0.95, Math.max(0.05, (k + 2 * table.global) / (n + 2))), cell: 'age unknown — TVL band only' };
+      var pooled = null;
+      table.tvlPooled.forEach(function (p) { if (r.tvl_usd >= p.tvlLo && r.tvl_usd < p.tvlHi) pooled = p; });
+      return { odds: pooled ? pooled.rate : table.global, cell: 'age unknown — TVL band only' };
     }
+    // Lookup age is capped at 729 days so it lands in the 1–2y band: the peer share rises with age,
+    // but that rise is a cohort effect, not evidence that a long-tokenless protocol is likelier to
+    // launch tomorrow. Bands are half-open [lo, hi), so 730 would land in 2–3y.
+    var lookupAge = Math.min(age, 729);
     var cell = null;
-    table.cells.forEach(function (c) { if (age >= c.ageLo && age < c.ageHi && r.tvl_usd >= c.tvlLo && r.tvl_usd < c.tvlHi) cell = c; });
+    table.cells.forEach(function (c) { if (lookupAge >= c.ageLo && lookupAge < c.ageHi && r.tvl_usd >= c.tvlLo && r.tvl_usd < c.tvlHi) cell = c; });
     if (!cell) return { odds: table.global, cell: 'no cell' };
-    return { odds: cell.rate, cell: oddsCellLabel(cell) + ' (n=' + cell.n + ', ' + cell.k + ' with token)' };
+    return { odds: cell.rate, cell: oddsCellLabel(cell) + ' (n=' + cell.n + ', ' + cell.k + ' with token)' + (age > 729 ? ' · age capped at 2y' : '') };
   }
 
   // ---- formatting --------------------------------------------------------------------
@@ -116,7 +130,8 @@
   var fit = fitComps(rows);
   var odds = oddsTable(rows);
   var fitMatch = Math.abs(fit.a - D.comps.a) < 0.0005 && Math.abs(fit.b - D.comps.b) < 0.0005;
-  var oddsMatch = odds.cells.every(function (c, i) { return Math.abs(c.rate - D.odds_cells[i].rate) < 0.0005; });
+  var oddsMatch = odds.cells.every(function (c, i) { return Math.abs(c.rate - D.odds_cells[i].rate) < 0.0005; }) &&
+    odds.tvlPooled.every(function (p, i) { return Math.abs(p.rate - D.odds_tvl_pooled[i].rate) < 0.0005; });
   $('top-meta').innerHTML =
     '<div>Snapshot as of <b>' + esc(D.as_of) + '</b></div>' +
     '<div>Source: <b>DefiLlama protocols snapshot</b></div>' +
@@ -130,7 +145,7 @@
   ];
   $('kpis').innerHTML = kpis.map(function (k) { return '<div class="kpi"><b>' + k[0] + '</b><span>' + k[1] + '</span></div>'; }).join('');
   $('modelcheck').textContent = fitMatch && oddsMatch
-    ? 'Model check: recomputed in this page from the ' + rows.length + ' rows below, the fit matches the board — a = ' + fit.a.toFixed(3) + ', b = ' + fit.b.toFixed(3) + ', R² = ' + fit.r2.toFixed(3) + ', LOO MAE = ' + fit.looMae.toFixed(3) + ' log points; the odds table matches on all 12 cells.'
+    ? 'Model check: recomputed in this page from the ' + rows.length + ' rows below, the fit matches the board — a = ' + fit.a.toFixed(3) + ', b = ' + fit.b.toFixed(3) + ', R² = ' + fit.r2.toFixed(3) + ', LOO MAE = ' + fit.looMae.toFixed(3) + ' log points; the odds table matches on all 12 cells and the 3 pooled rates.'
     : 'Model check: recomputed fit differs from the board — do not trust the values above until this is fixed.';
   $('fittext').textContent = 'log(market cap) = ' + D.comps.a + ' + ' + D.comps.b + ' × log(TVL), fitted by least squares on the ' + D.comps.n + ' protocols whose tokens trade (R² = ' + D.comps.r2 + ', residual SD = ' + D.comps.resid_sd + ', leave-one-out MAE = ' + D.comps.loo_mae + ' log points). Fitted launch value = exp(a + b × ln(TVL)). Pre-token expected value = fitted value × token odds × growth tilt.';
   var oddsHtml = '<tr><th></th><th>$5M–$100M</th><th>$100M–$1B</th><th>$1B+</th></tr>';
@@ -288,7 +303,7 @@
     var h = location.hash.replace(/^#/, '');
     if (!h) return;
     var p = new URLSearchParams(h);
-    if (p.get('status') !== null) { state.status = p.get('status') || ''; $('status').value = state.status; }
+    if (p.get('status') !== null) { var st = p.get('status') || ''; state.status = ['pre-token', 'live', 'live-unpriced', 'not-a-launch', ''].indexOf(st) >= 0 ? st : 'pre-token'; $('status').value = state.status; }
     if (p.get('chain')) { state.chain = p.get('chain'); chainSel.value = state.chain; }
     if (p.get('category')) { state.cat = p.get('category'); catSel.value = state.cat; }
     if (p.get('q')) { state.q = p.get('q'); $('q').value = state.q; }

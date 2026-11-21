@@ -21,6 +21,12 @@
 //   token odds: empirical table, age band x TVL band, share of protocols in the cell that record a
 //     token, Laplace-smoothed toward the global rate: rate = (k + 2*0.55) / (n + 2), clamped [0.05, 0.95].
 //     Age unknown (listed_at null, 113 protocols): the TVL band's pooled rate across all ages.
+//     Lookup age is capped at 729 days so the lookup lands in the 1–2y band (the bands are
+//     half-open [lo, hi), so a cap of 730 would land in the 2–3y band instead): the peer share rises
+//     with age, but that rise is a cohort effect — protocols listed in the 2021 launch wave record
+//     tokens far more often than recent ones — not evidence that a protocol which has run 3 years
+//     tokenless is likelier to launch tomorrow. A 4-year-old tokenless protocol is scored with the
+//     1–2y band, never the 3y+ band.
 //   growth tilt: mult = 1 + clamp(change_7d, -60, 120) * 0.001  (range 0.94-1.12, a mild prior)
 //   pre-token:  implied = round(fitted * odds * tilt)   (expected value of a launch)
 //   live:       implied = mcap_usd
@@ -68,6 +74,8 @@ export const MODEL_VERSION = 'radar-2-fitted';
 
 /** Age bands (days) and TVL bands (USD) of the token-odds table. */
 export const AGE_BANDS: Array<[number, number]> = [[0, 365], [365, 730], [730, 1095], [1095, Infinity]];
+/** The odds lookup never uses an age band older than 1–2y (bands are half-open, so 729 lands in it). */
+export const ODDS_AGE_CAP_DAYS = 729;
 export const TVL_BANDS: Array<[number, number]> = [[5_000_000, 100_000_000], [100_000_000, 1_000_000_000], [1_000_000_000, Infinity]];
 export const GLOBAL_RATE_PRIOR = 0.55;
 export const PRIOR_WEIGHT = 2;
@@ -335,13 +343,17 @@ export function tokenOdds(p: SnapshotProtocol, asOf: string, table: { cells: Odd
     const pooled = table.tvlPooled.find((c) => inBand(p.tvl_usd, c.tvl_lo, c.tvl_hi ?? Infinity));
     return { odds: pooled?.rate ?? 0.55, cell: 'age unknown — TVL band only' };
   }
+  // Lookup age is capped at 729 days so it lands in the 1–2y band: the peer share rises with age,
+  // but that rise is a cohort effect, not evidence that a long-tokenless protocol is likelier to
+  // launch tomorrow (see header). Bands are half-open [lo, hi), so 730 would land in 2–3y.
+  const lookupAge = Math.min(age, ODDS_AGE_CAP_DAYS);
   const cell = table.cells.find(
-    (c) => inBand(age, c.age_lo, c.age_hi ?? Infinity) && inBand(p.tvl_usd, c.tvl_lo, c.tvl_hi ?? Infinity),
+    (c) => inBand(lookupAge, c.age_lo, c.age_hi ?? Infinity) && inBand(p.tvl_usd, c.tvl_lo, c.tvl_hi ?? Infinity),
   );
   if (!cell) return { odds: 0.55, cell: 'no cell' };
   const ageLabel = cell.age_hi === null ? `${cell.age_lo}d+` : `${cell.age_lo}–${cell.age_hi}d`;
   const tvlLabel = cell.tvl_hi === null ? `$${Math.round(cell.tvl_lo / 1e9)}B+` : `$${Math.round(cell.tvl_lo / 1e6)}M–$${Math.round(cell.tvl_hi / 1e6)}M`;
-  return { odds: cell.rate, cell: `${ageLabel} × ${tvlLabel} (n=${cell.n}, ${cell.k} with token)` };
+  return { odds: cell.rate, cell: `${ageLabel} × ${tvlLabel} (n=${cell.n}, ${cell.k} with token)${age > ODDS_AGE_CAP_DAYS ? ' · age capped at 2y' : ''}` };
 }
 
 /** The growth tilt: a mild prior, at most ±12%. */
@@ -397,7 +409,10 @@ function money(n: number): string {
 function actionFor(p: SnapshotProtocol, capital: number, chain: string): string {
   const c = (p.category ?? '').toLowerCase();
   const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Supply ${money(capital)} of USDC to ${name} on ${chain} as a lender and keep the deposit open.`;
+  if (c.includes('cdp')) return `Lock ${money(capital)} of collateral in ${name} on ${chain} to mint its stable asset and keep the position open.`;
+  if (c.includes('lend') || c.includes('collateral')) return `Supply ${money(capital)} of USDC to ${name} on ${chain} as a lender and keep the deposit open.`;
+  if (c.includes('basis')) return `Deposit ${money(capital)} of USDC into ${name}'s delta-neutral basis position on ${chain}, holding the spot leg and the short hedge.`;
+  if (c.includes('liquidity manager')) return `Deposit ${money(capital)} of USDC into a ${name}-managed liquidity position on ${chain} and keep it open.`;
   if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm') || c.includes('farm')) return `Provide ${money(capital)} of liquidity to ${name}'s main pool on ${chain} and keep the position open.`;
   if (c.includes('bridge')) return `Bridge ${money(capital)} of USDC to ${chain} through ${name} and use the bridged funds in its app.`;
   if (c.includes('staking') || c.includes('restak')) return `Stake ${money(capital)} of the chain's staking asset through ${name} on ${chain} and keep the receipt token.`;
